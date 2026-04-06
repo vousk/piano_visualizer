@@ -365,7 +365,7 @@ class Piano:
                 frame = 0
                 start_keys = [None] * 88
                 for msg in track:
-                    frame += msg.time/midi.ticks_per_beat * tempo/1675000 * self.fps
+                    frame += (msg.time * tempo / midi.ticks_per_beat / 1_000_000) * self.fps
                     if msg.is_meta:
                         if msg.type == "set_tempo":
                             tempo = msg.tempo
