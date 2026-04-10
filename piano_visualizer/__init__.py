@@ -262,107 +262,167 @@ class Video:
         surf = pygame.Surface(self.resolution, pygame.SRCALPHA)
         surf.fill((0, 0, 0, 0))
         width, height = self.resolution
-        max_height = height/5
         min_height = height/12
-        whitekey_height = min(max_height, max(
-            min_height, (height-100)/(len(self.pianos)+2)))
-        blackkey_height = whitekey_height/2
-        blackkey_width_factor = 3/4
-        offset = height/len(self.pianos)
-        p_height = offset
+        p_height = height/len(self.pianos)
         p_width = width
-        whitekey_width = width/(88*7/12) - 1
+        num_white_keys = 52
+        gap = 2
+        # calculates keys dimensions based on actual piano proportions and video resolution
+        total_seps = (num_white_keys - 1) * gap
+        ideal_keys_width = width - total_seps
+        whitekey_width = int(ideal_keys_width // num_white_keys)
+        actual_whitekey_height = whitekey_width * 6
+        whitekey_height = min(actual_whitekey_height, max(min_height, height/(len(self.pianos)+2)))
+        blackkey_width = whitekey_width * 0.65
+        blackkey_height = whitekey_height * 0.65
+        blackkey_x_offsets = [0, 0.65, 0, 0.35, 0, 0, 0.75, 0, 0.5, 0, 0.3, 0]
+        used_width = whitekey_width * num_white_keys + total_seps
+        margin = (width - used_width) // 2
 
         for i, piano in enumerate(self.pianos):
-            p_y = offset * i
+            p_y = p_height * i
             piano.render(surf, frame, p_y, p_width, p_height, whitekey_height,
-                         blackkey_height, whitekey_width, whitekey_width * blackkey_width_factor, 1)
+                         blackkey_height, whitekey_width, blackkey_width, gap, blackkey_x_offsets, margin)
 
         return surf
 
-
 class Piano:
-    def __init__(self, midis=[], blocks=True, color="rainbow"):
+    def __init__(self, midis=[], blocks=True, color="rainbow", no_gradient=False, realistic_render=False):
         self.midis = list(midis)
         self.blocks = bool(blocks)
         self.block_speed = 200
         self.block_rounding = 5
-        self.color = color.lower()
+        self.white_key_rounding = 3
+        self.color = color
+        self.no_gradient = no_gradient
+        self.realistic_render = realistic_render
         self.notes = []
         self.fps = None
         self.offset = None
-        self.block_col = (255, 255, 255)
-        self.white_hit_col = (255, 0, 0)
+        self.block_col = (255, 255, 255) if color == "rainbow" else color
+        self.white_hit_col = (255, 0, 0) if color == "rainbow" else color
         self.white_col = (255, 255, 255)
-        self.black_hit_col = (255, 0, 0)
-        self.black_col = (0, 0, 0)
+        self.black_hit_col = (255, 0, 0) if color == "rainbow" else color
+        self.black_col = (20, 20, 20)
 
     def configure(self, datapath, value):
         if datapath in self.__dict__.keys():
             setattr(self, datapath, value)
 
-    def render_rect(self, surf, x, y, width, height, color):
+    def render_key(self, surf, x, y, width, height, color, is_black, gap):
+        bottom_rounding = 0 if is_black or not self.realistic_render else self.white_key_rounding
+        if is_black:
+            #  draw black key borders
+            pygame.draw.rect(surf, self.black_col, (x, y, width, height))
+            # define black key size (without borders)
+            x += 1 + gap // 2
+            width = max(0, width - 2 - gap)
+            height = max(0, height - gap)
+        else:
+            # draw white key background
+            pygame.draw.rect(surf, self.white_col, (x, y, width, height), \
+                border_top_left_radius=0, border_top_right_radius=0, \
+                border_bottom_left_radius=bottom_rounding, border_bottom_right_radius=bottom_rounding)
+
         s = pygame.Surface((width, height), pygame.SRCALPHA)
-        for cy in range(int(height+1)):
-            pygame.draw.rect(s, list(color) + [255*((height-cy)/height)], (0, cy, width, 1))
+
+        if self.no_gradient:
+            pygame.draw.rect(surf, color, (x, y, width, height), \
+                border_top_left_radius=0, border_top_right_radius=0, \
+                border_bottom_left_radius=bottom_rounding, border_bottom_right_radius=bottom_rounding)
+        else:
+            for cy in range(int(height+1)):
+                pygame.draw.rect(s, list(color) + [255*((height-cy)/height)], (0, cy, width, 1))
+
         surf.blit(s, (x, y))
 
-    def render(self, surf, frame, y, width, height, wheight, bheight, wwidth, bwidth, gap):
-        counter = 0
-        playing_keys = self.get_play_status(frame)
-        black_keys = []
+    def render(self, surf, frame, y, width, height, wheight, bheight, wwidth, bwidth, gap, blackkey_x_offsets, margin=0):
+        # num_white_keys = 52
+        key_xs = [0]*88
+        white_xs = []
+        white_indices = [None]*88
+        white_index = 0
+        for key in range(88):
+            if not self.is_black(key):
+                key_xs[key] = margin + white_index*(wwidth + gap)
+                white_xs.append(key_xs[key])
+                white_indices[key] = white_index
+                white_index += 1
+            else:
+                # black key position according to surrounding white keys
+                left_index = key - 1
+                if left_index >= 0 and white_indices[left_index] is not None:
+                    key_xs[key] = key_xs[left_index] + wwidth - (bwidth * blackkey_x_offsets[self.get_black_key_scale_index(key)]) + gap
+                else:
+                    key_xs[key] = 0
+
+        # render falling notes
         if self.blocks:
-            self.render_blocks(surf, frame, y, width, height - wheight, wwidth, bwidth, gap)
+            self.render_blocks(surf, frame, y, width, height - wheight , wwidth, bwidth, gap, key_xs)
+
         py = y + height - wheight
+        # fill black background under piano (for margins around centered keyboard)
         surf.fill((0, 0, 0), (0, py, width, wheight))
 
+        playing_keys = self.get_play_status(frame)
+
+        # draw all white keys
         for key in range(88):
+            x = key_xs[key]
+            # i = 0
+            if not self.is_black(key):
+                # white keys
+                color = self.get_rainbow(x, width) if (key in playing_keys and self.color == "rainbow") else (self.white_hit_col if key in playing_keys else self.white_col)
+                self.render_key(surf, x, py, wwidth, wheight, color, False, gap)
+
+        # draw all black keys
+        for key in range(88):
+            x = key_xs[key]
             if self.is_black(key):
-                x = (counter+1)*(wwidth + gap) - gap/2 - bwidth/2
+                # black keys
                 if key in playing_keys:
-                    color = self.get_rainbow(
-                        x, width) if self.color == "rainbow" else self.black_hit_col
+                    color = self.get_rainbow(x, width) if self.color == "rainbow" else self.black_hit_col
+                    self.render_key(surf, x, py, bwidth, bheight, color, True, gap)
                 else:
                     color = self.black_col
-                black_keys.append(
-                    ((surf, self.black_col, (x, py, bwidth, bheight)), (surf, x, py, bwidth, bheight, color)))
-            else:
-                counter += 1
-                x = counter*(wwidth + gap)
-                if key in playing_keys:
-                    color = self.get_rainbow(
-                        x, width) if self.color == "rainbow" else self.white_hit_col
-                else:
-                    color = self.white_col
-                pygame.draw.rect(surf, self.white_col, (x, py, wwidth, wheight))
-                self.render_rect(surf, x, py, wwidth, wheight, color)
+                    self.render_key(surf, x, py, bwidth, bheight, color, True, gap)
+                    if self.realistic_render:
+                        bevel_color = (70, 70, 70)
+                        bevel_s_color = (60, 60, 60)
+                        bevel_b = 4
+                        bevel_r = 6
+                        bevel_w = max(0, bwidth - bevel_b)
+                        bevel_w_s = 2
+                        bevel_h = bheight * 0.1
+                        bevel_h_s = bheight - 2
+                        bevel_x = x + bevel_b / 2
+                        bevel_x_sl = x + bwidth - bevel_b
+                        bevel_x_sr = x + bevel_b / 2
+                        bevel_y = py + bheight - bevel_h - 3
+                        bevel_y_s = py
+                        pygame.draw.rect(surf, bevel_color, (bevel_x, bevel_y, bevel_w, bevel_h), \
+                            border_top_left_radius=bevel_r, border_top_right_radius=bevel_r, \
+                            border_bottom_left_radius=0, border_bottom_right_radius=0)
+                        pygame.draw.rect(surf, bevel_s_color, (bevel_x_sl, bevel_y_s, bevel_w_s, bevel_h_s))
+                        pygame.draw.rect(surf, bevel_s_color, (bevel_x_sr, bevel_y_s, bevel_w_s, bevel_h_s))
 
-        for key in black_keys:
-            pygame.draw.rect(*key[0])
-            self.render_rect(*key[1])
-
-    def render_blocks(self, surf, frame, y, width, height, wwidth, bwidth, gap):
+    # falling notes
+    def render_blocks(self, surf, frame, y, width, height, wwidth, bwidth, gap, key_xs):
         for note in self.notes:
             bottom = (frame - note["start"]) * \
                 self.block_speed / self.fps + y + height
             top = bottom - (note["end"] - note["start"]) * \
                 self.block_speed / self.fps
             if top <= y + height and bottom >= y:
-                x = self.get_key_x(note["note"], wwidth, gap, bwidth)
-                pygame.draw.rect(surf, self.get_rainbow(x, width) if self.color == "rainbow" else self.block_col, (
-                    x, top, bwidth if self.is_black(note["note"]) else wwidth, bottom-top), border_radius=self.block_rounding)
-
-    def get_key_x(self, key, wwidth, gap, bwidth):
-        counter = 1
-
-        for k in range(key):
-            if not self.is_black(k):
-                counter += 1
-
-        if self.is_black(key):
-            return counter*(wwidth + gap) - gap/2 - bwidth/2
-        else:
-            return counter*(wwidth + gap)
+                key = note["note"]
+                x = key_xs[key]
+                w = wwidth
+                color = self.get_rainbow(x, width) if self.color == "rainbow" else self.block_col
+                if self.is_black(key):
+                    x = x + 1 + gap // 2
+                    w = max(0, bwidth - 2 - gap)
+                pygame.draw.rect(surf, color, (
+                        x, top, w, bottom-top), border_radius=self.block_rounding)
 
     def get_rainbow(self, x, width):
         rgb = hsv_to_rgb(((x/width)*255, 255, 255))
@@ -393,8 +453,13 @@ class Piano:
                             else:
                                 start_keys[msg.note - 21] = int(frame)
 
+    def get_black_key_scale_index(self, key):
+        # offset 3 notes to align MIDI A0 with a C
+        return (key - 3) % 12
+
     def is_black(self, key):
-        return (key - 3) % 12 in (1, 3, 6, 8, 10)
+        key_scale_index = self.get_black_key_scale_index(key)
+        return key_scale_index in (1, 3, 6, 8, 10)
 
     def get_play_status(self, frame):
         keys = set()
