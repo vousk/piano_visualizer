@@ -73,7 +73,9 @@ class Video:
                     pass
                 surf = pygame.surfarray.pixels3d(self.render(
                     frame-self.start_offset)).swapaxes(0, 1)
-                video.write(surf)
+                # Convert from RGB to BGR for OpenCV
+                surf_bgr = cv2.cvtColor(surf, cv2.COLOR_RGB2BGR)
+                video.write(surf_bgr)
             video.release()
             cv2.destroyAllWindows()
 
@@ -164,7 +166,9 @@ class Video:
                 for frame in tqdm(range(min_frame, max_frame + self.start_offset + self.end_offset + 1), desc="Exporting", unit="frames"):
                     surf = pygame.surfarray.pixels3d(self.render(
                         frame-self.start_offset)).swapaxes(0, 1)
-                    video.write(surf)
+                    # Convert from RGB to BGR for OpenCV
+                    surf_bgr = cv2.cvtColor(surf, cv2.COLOR_RGB2BGR)
+                    video.write(surf_bgr)
 
             video.release()
             cv2.destroyAllWindows()
@@ -351,7 +355,9 @@ class Piano:
             return counter*(wwidth + gap)
 
     def get_rainbow(self, x, width):
-        return hsv_to_rgb(((x/width)*255, 255, 255))
+        rgb = hsv_to_rgb(((x/width)*255, 255, 255))
+        # invert values to preserve the same final rainbow as before fixing BGR format for OpenCV
+        return (rgb[2], rgb[1], rgb[0])
 
     def add_midi(self, path):
         self.midis.append(path)
