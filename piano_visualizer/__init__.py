@@ -219,9 +219,19 @@ class Video:
                 if os.path.isfile(path):
                     os.remove(path)
                 ffmpeg.run(video)
+
             else:
                 print("Skipping music...")
-                os.rename(os.path.join(export_dir, "video.mp4"), path)
+                src = os.path.join(export_dir, "video.mp4")
+                try:
+                    os.rename(src, path)
+                except OSError as e:
+                    if getattr(e, 'errno', None) == 18:  # Invalid cross-device link
+                        print("Cross-device link error detected, using shutil.copy2 as fallback.")
+                        shutil.copy2(src, path)
+                        os.remove(src)
+                    else:
+                        raise
 
             print(f"Video Done")
             print("Cleaning up...")
