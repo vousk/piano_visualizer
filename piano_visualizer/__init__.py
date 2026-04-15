@@ -32,8 +32,43 @@ from random_utils.funcs import crash
 from pydub import AudioSegment
 from tqdm import tqdm
 
-
 class Video:
+    def get_piano_dimensions(self):
+        """
+        Compute and return piano dimensions for rendering and block fall calculations.
+        Returns a dict with keys: whitekey_height, blackkey_height, block_fall_height, etc.
+        """
+        height = self.resolution[1]
+        width = self.resolution[0]
+        min_height = height / 12
+        p_height = height / len(self.pianos)
+        num_white_keys = 52
+        gap = 2
+        # calculates keys dimensions based on actual piano proportions and video resolution
+        total_seps = (num_white_keys - 1) * gap
+        ideal_keys_width = width - total_seps
+        whitekey_width = int(ideal_keys_width // num_white_keys)
+        actual_whitekey_height = whitekey_width * 6
+        whitekey_height = min(actual_whitekey_height, max(min_height, height / (len(self.pianos) + 2)))
+        blackkey_width = whitekey_width * 0.65
+        blackkey_height = whitekey_height * 0.65
+        block_fall_height = p_height - whitekey_height
+        blackkey_x_offsets = [0, 0.65, 0, 0.35, 0, 0, 0.75, 0, 0.5, 0, 0.3, 0]
+        used_width = whitekey_width * num_white_keys + total_seps
+        margin = (width - used_width) // 2
+        return {
+            'whitekey_height': whitekey_height,
+            'blackkey_height': blackkey_height,
+            'block_fall_height': block_fall_height,
+            'whitekey_width': whitekey_width,
+            'blackkey_width': blackkey_width,
+            'gap': gap,
+            'blackkey_x_offsets': blackkey_x_offsets,
+            'margin': margin,
+            'p_height': p_height,
+            'p_width': width,
+        }
+
     def __init__(self, resolution=(1920, 1080), fps=30, start_offset=0, end_offset=0):
         self.resolution = resolution
         self.fps = fps
@@ -87,19 +122,39 @@ class Video:
             print(f"Piano {i+1} done")
         print("All pianos done.")
 
-        min_frame, max_frame = min(self.pianos, key=lambda x: x.get_min_time()).get_min_time(
-        ), max(self.pianos, key=lambda x: x.get_max_time()).get_max_time()
+        # Calculate MIDI time boundaries and export range
+        min_frame = min(self.pianos, key=lambda x: x.get_min_time()).get_min_time()
+        max_note_frame = max(self.pianos, key=lambda x: x.get_max_time()).get_max_time()
+        # True end of MIDI (including trailing silence)
+        midi_end_frame = max(
+            max((note['end'] for note in piano.notes), default=0) for piano in self.pianos
+        )
 
-        max_frame = int(frac_frames * (max_frame - min_frame) + min_frame)
-        frames = int(max_frame - min_frame)
+        # Block fall duration (frames for last notes to reach the keyboard)
+        if self.pianos:
+            piano = self.pianos[0]
+            dims = self.get_piano_dimensions()
+            block_fall_height = dims['block_fall_height']
+            block_speed = getattr(piano, 'block_speed', 200)
+            block_fall_duration = int(block_fall_height / (block_speed / self.fps))
+        else:
+            block_fall_duration = 0
 
-        print("-"*50)
-        print("Exporting video:")
+        # Silence before first note (in frames)
+        silence_start = min_frame
+        # Silence after last note (in frames)
+        silence_end = max(0, midi_end_frame - max_note_frame)
+
+        # Export range: from frame 0 to the end of the last block fall and trailing silence
+        export_start = 0
+        export_end = int(silence_start + (frac_frames * (max_note_frame - min_frame)) + block_fall_duration + silence_end + self.start_offset + self.end_offset)
+        frames = export_end - export_start + 1
         print(f"  Resolution: {' by '.join(map(str, self.resolution))}")
         print(f"  FPS: {self.fps}")
+
+
         print(f"  Frames: {frames}")
-        print(
-            f"  Duration: {int((frames+self.start_offset+self.end_offset)/self.fps)} secs\n")
+        print(f"  Duration: {int(frames/self.fps)} secs\n")
 
         time_start = time.time()
 
@@ -108,6 +163,7 @@ class Video:
         try:
             video = cv2.VideoWriter(os.path.join(export_dir, "video.mp4"), cv2.VideoWriter_fourcc(
                 *"MPEG"), self.fps, self.resolution)
+
             if num_cores > 1:
                 if num_cores >= multiprocessing.cpu_count():
                     print("High chance of computer freezing")
@@ -123,19 +179,21 @@ class Video:
                             num_cores = int(input("New core count: "))
                 num_cores = min(num_cores, multiprocessing.cpu_count())
                 processes = []
-                curr_frame = 0
-                frame_inc = (frames + self.start_offset + self.end_offset) / num_cores
+                curr_frame = export_start
+                frame_inc = (frames) / num_cores
 
                 print(
                     f"Exporting {int(frame_inc)} on each of {num_cores} cores...")
 
                 for i in range(num_cores):
+                    start_f = int(curr_frame)
+                    end_f = int(min(export_end, curr_frame + frame_inc - 1))
                     p = multiprocessing.Process(target=quick_export, args=(
-                        i, int(curr_frame), int(curr_frame + frame_inc)))
+                        i, start_f, end_f))
                     p.start()
                     processes.append(p)
 
-                    curr_frame += frame_inc + 1
+                    curr_frame += frame_inc
 
                 time.sleep(.1)  # Wait for all processes to start.
 
@@ -152,7 +210,7 @@ class Video:
 
                 videos = [os.path.join(
                     export_dir, f"video{c}.mp4") for c in range(num_cores)]
-                with tqdm(total=frames+self.start_offset+self.end_offset+num_cores, unit="frames", desc="Concatenating") as t:
+                with tqdm(total=frames+num_cores, unit="frames", desc="Concatenating") as t:
                     for v in videos:
                         curr_v = cv2.VideoCapture(v)
                         while curr_v.isOpened():
@@ -163,9 +221,11 @@ class Video:
                             t.update()
 
             else:
-                for frame in tqdm(range(min_frame, max_frame + self.start_offset + self.end_offset + 1), desc="Exporting", unit="frames"):
+                # Export all frames including the block fall duration
+                for frame in tqdm(range(export_start, export_end + 1), desc="Exporting", unit="frames"):
+                    # Shift all rendering by the silence at the start
                     surf = pygame.surfarray.pixels3d(self.render(
-                        frame-self.start_offset)).swapaxes(0, 1)
+                        frame - silence_start - self.start_offset)).swapaxes(0, 1)
                     # Convert from RGB to BGR for OpenCV
                     surf_bgr = cv2.cvtColor(surf, cv2.COLOR_RGB2BGR)
                     video.write(surf_bgr)
@@ -261,29 +321,15 @@ class Video:
     def render(self, frame):
         surf = pygame.Surface(self.resolution, pygame.SRCALPHA)
         surf.fill((0, 0, 0, 0))
-        width, height = self.resolution
-        min_height = height/12
-        p_height = height/len(self.pianos)
-        p_width = width
-        num_white_keys = 52
-        gap = 2
-        # calculates keys dimensions based on actual piano proportions and video resolution
-        total_seps = (num_white_keys - 1) * gap
-        ideal_keys_width = width - total_seps
-        whitekey_width = int(ideal_keys_width // num_white_keys)
-        actual_whitekey_height = whitekey_width * 6
-        whitekey_height = min(actual_whitekey_height, max(min_height, height/(len(self.pianos)+2)))
-        blackkey_width = whitekey_width * 0.65
-        blackkey_height = whitekey_height * 0.65
-        blackkey_x_offsets = [0, 0.65, 0, 0.35, 0, 0, 0.75, 0, 0.5, 0, 0.3, 0]
-        used_width = whitekey_width * num_white_keys + total_seps
-        margin = (width - used_width) // 2
-
+        dims = self.get_piano_dimensions()
         for i, piano in enumerate(self.pianos):
-            p_y = p_height * i
-            piano.render(surf, frame, p_y, p_width, p_height, whitekey_height,
-                         blackkey_height, whitekey_width, blackkey_width, gap, blackkey_x_offsets, margin)
-
+            p_y = dims['p_height'] * i
+            piano.render(
+                surf, frame, p_y, dims['p_width'], dims['p_height'],
+                dims['whitekey_height'], dims['blackkey_height'],
+                dims['whitekey_width'], dims['blackkey_width'],
+                dims['gap'], dims['blackkey_x_offsets'], dims['margin']
+            )
         return surf
 
 class Piano:
