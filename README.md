@@ -34,14 +34,19 @@ import piano_visualizer
 # Create a piano with a midi file(s)
 piano = piano_visualizer.Piano(["/path/to/your/midi/file.mid"])
 
-# You can use options to change the visual rendering:
-# `color` of notes and played keys can be "rainbow" (default) or an RGB tuple
-# `no_gradient` uses flat color instead of gradient (default) on played keys
-# `realistic_render` option adds round border to bottom of white keys and bevel to black keys
+## Piano options:
+# You can customize the visual rendering to suit your preferences:
+# - `color` of notes and played keys can be "rainbow" (default) or an RGB tuple
+# - `no_gradient` uses flat color instead of gradient (default) on played keys
+# - `realistic_render` option adds round border to bottom of white keys and bevel to black keys
 # piano = piano_visualizer.Piano(midis=["/path/to/your/midi/file.mid"], color=(255, 0, 0), no_gradient=True, realistic_render=True)
 
 # Create a video with resolution/fps
 video = piano_visualizer.Video((1920, 1080), 30)
+
+## Video options:
+# - `keyboard_crop`: if True, the video height will be automatically adjusted to fit only the keyboard (no falling notes area, only the keys are visible)
+# video = piano_visualizer.Video((1920, 1080), 30, keyboard_crop=True)
 
 # Add piano to video
 video.add_piano(piano)

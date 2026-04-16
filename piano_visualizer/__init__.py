@@ -38,8 +38,8 @@ class Video:
         Compute and return piano dimensions for rendering and block fall calculations.
         Returns a dict with keys: whitekey_height, blackkey_height, block_fall_height, etc.
         """
-        height = self.resolution[1]
-        width = self.resolution[0]
+        height = self.requested_resolution[1]
+        width = self.requested_resolution[0]
         min_height = height / 12
         p_height = height / len(self.pianos)
         num_white_keys = 52
@@ -69,16 +69,23 @@ class Video:
             'p_width': width,
         }
 
-    def __init__(self, resolution=(1920, 1080), fps=30, start_offset=0, end_offset=0):
-        self.resolution = resolution
+    def __init__(self, resolution=(1920, 1080), fps=30, start_offset=0, end_offset=0, keyboard_crop=False):
+        self.requested_resolution = resolution
         self.fps = fps
         self.start_offset = start_offset
         self.end_offset = end_offset
         self.audio = ["default"]
         self.pianos = []
+        self.keyboard_crop = keyboard_crop
+        self.resolution = resolution
 
     def add_piano(self, piano):
         self.pianos.append(piano)
+        # Adjust resolution if keyboard_crop is enabled
+        if self.keyboard_crop:
+            dims = self.get_piano_dimensions()
+            cropped_height = int(dims['whitekey_height'] * len(self.pianos))
+            self.resolution = (self.requested_resolution[0], cropped_height)
 
     def set_audio(self, audio, overwrite=True):
         if overwrite:
@@ -323,9 +330,14 @@ class Video:
         surf.fill((0, 0, 0, 0))
         dims = self.get_piano_dimensions()
         for i, piano in enumerate(self.pianos):
-            p_y = dims['p_height'] * i
+            if getattr(self, 'keyboard_crop', False):
+                p_y = 0
+                p_height = dims['whitekey_height']
+            else:
+                p_y = dims['p_height'] * i
+                p_height = dims['p_height']
             piano.render(
-                surf, frame, p_y, dims['p_width'], dims['p_height'],
+                surf, frame, p_y, dims['p_width'], p_height,
                 dims['whitekey_height'], dims['blackkey_height'],
                 dims['whitekey_width'], dims['blackkey_width'],
                 dims['gap'], dims['blackkey_x_offsets'], dims['margin']
